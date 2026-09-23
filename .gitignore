@@ -1,0 +1,3 @@
+/blindindex
+*.test
+testdata/fuzz/
