@@ -31,7 +31,9 @@ func testIndexer(t testing.TB, stemmers ...Stemmer) *Indexer {
 // --- T1: tokenisation must not mangle the terms this is most useful for ---
 
 func TestAnalyzer_DoesNotMangleNonASCII(t *testing.T) {
-	a := NewTextAnalyzer() // no stemming, so we see the tokenizer's own output
+	// Folding off, so we see the tokenizer's raw output. The property under test is that no
+	// character is silently lost: a letter-range tokenizer truncates exactly these.
+	a := &TextAnalyzer{Lowercase: true}
 	cases := []struct {
 		name, in, want string
 	}{
@@ -46,10 +48,55 @@ func TestAnalyzer_DoesNotMangleNonASCII(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := a.Tokens(tc.in)
 			if len(got) != 1 || got[0] != tc.want {
-				t.Fatalf("Tokens(%q) = %v, want [%q]. A naive letter-range tokenizer "+
-					"truncates or drops exactly these.", tc.in, got, tc.want)
+				t.Fatalf("Tokens(%q) = %v, want [%q]", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestAnalyzer_FoldingIsSymmetric is the property that matters for recall: whichever spelling
+// a user types, they reach the same token.
+//
+// Do not be tempted to let a stemmer do this. Snowball folds only the diacritics of its own
+// language, so a Dutch stemmer handles "ü" and ignores "š" and "ł". That asymmetry is worse
+// than no folding at all, because one spelling works and a neighbouring one silently misses.
+func TestAnalyzer_FoldingIsSymmetric(t *testing.T) {
+	a := NewTextAnalyzer() // folding on by default
+	for _, pair := range [][2]string{
+		{"Müller", "Muller"},
+		{"Škoda", "Skoda"},
+		{"Łukasz", "Lukasz"},
+		{"Şahin", "Sahin"},
+		{"Ångström", "Angstrom"},
+		{"Æther", "Aether"},
+	} {
+		accented, plain := a.Tokens(pair[0]), a.Tokens(pair[1])
+		if len(accented) != 1 || len(plain) != 1 {
+			t.Fatalf("expected one token each for %v, got %v and %v", pair, accented, plain)
+		}
+		if accented[0] != plain[0] {
+			t.Errorf("%q folds to %q but %q folds to %q; both spellings must converge",
+				pair[0], accented[0], pair[1], plain[0])
+		}
+	}
+}
+
+func TestAnalyzer_FoldingLeavesNonLatinAlone(t *testing.T) {
+	a := NewTextAnalyzer()
+	for _, in := range []string{"ольга", "東京", "مرحبا"} {
+		got := a.Tokens(in)
+		if len(got) == 0 {
+			t.Fatalf("Tokens(%q) produced nothing", in)
+		}
+		// Joining rather than comparing a single token, because Unicode text segmentation
+		// treats each CJK ideograph as its own word: "東京" is two tokens, not one. That is
+		// the standard's behaviour without dictionary-based segmentation, and it is a real
+		// limitation for CJK recall. What must hold regardless is that folding neither drops
+		// nor substitutes a character.
+		if joined := strings.Join(got, ""); joined != in {
+			t.Errorf("Tokens(%q) rejoins to %q; non-Latin scripts must pass through unchanged",
+				in, joined)
+		}
 	}
 }
 

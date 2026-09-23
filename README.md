@@ -124,6 +124,18 @@ naive "split on non-letters" tokenizer mangles exactly the terms a blind index i
 for. `Łukasz` loses its first letter, `Škoda` becomes `koda`, and Cyrillic or CJK can vanish
 entirely. There are tests for each.
 
+Diacritics are folded by default, so someone typing `Muller` reaches a document containing
+`Müller`. Do not leave this to a stemmer: Snowball folds only the diacritics of its own
+language, so a Dutch stemmer handles `ü` and ignores `š` and `ł`, and that asymmetry is worse
+than no folding because one spelling works while a neighbouring one silently misses. Folding
+covers NFD-decomposable accents plus an explicit table for stroke letters such as `ł`, `ø`
+and `đ`, which Unicode does not decompose. Non-Latin scripts pass through untouched.
+
+**Known limitation:** Unicode text segmentation treats each CJK ideograph as its own word, so
+`東京` becomes two tokens rather than one. That is the standard's behaviour without
+dictionary-based segmentation, and it weakens recall for CJK. Supply your own `Analyzer` if
+that matters to you.
+
 `Analyzer` is an interface. Supply your own if your corpus needs different handling. Use the
 same one for building and querying, or the digests will not match and you will silently find
 nothing.

@@ -8,4 +8,7 @@ require (
 	github.com/blevesearch/snowballstem v0.9.0
 )
 
-require github.com/bits-and-blooms/bitset v1.24.2 // indirect
+require (
+	github.com/bits-and-blooms/bitset v1.24.2 // indirect
+	golang.org/x/text v0.42.0 // indirect
+)
