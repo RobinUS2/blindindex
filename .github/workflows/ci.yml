@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The oldest supported toolchain first. A library that silently raises its floor
+        # forces every consumer to upgrade, which is how this matrix earned its place.
+        go: ['1.24', '1.25']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: false
+      - name: Verify the go directive is not above the matrix floor
+        run: |
+          want=1.24.0
+          got=$(awk '/^go /{print $2}' go.mod)
+          test "$got" = "$want" || { echo "go.mod says $got, expected $want"; exit 1; }
+      - run: go build ./...
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go test -race ./...
