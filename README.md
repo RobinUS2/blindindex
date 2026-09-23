@@ -147,6 +147,7 @@ nothing.
 | [bits-and-blooms/bloom](https://github.com/bits-and-blooms/bloom) | BSD-2-Clause |
 | [blevesearch/segment](https://github.com/blevesearch/segment) | Apache-2.0 |
 | [blevesearch/snowballstem](https://github.com/blevesearch/snowballstem) | BSD-3-Clause |
+| [golang.org/x/text](https://pkg.go.dev/golang.org/x/text) | BSD-3-Clause |
 
 Hashing is `crypto/hmac` and `crypto/sha256` from the standard library. No cryptographic
 primitive is implemented here; this package only composes standard ones.
