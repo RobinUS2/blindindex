@@ -227,3 +227,29 @@ func UnmarshalFilter(b []byte) (Filter, error) {
 	copy(f.data, body)
 	return f, nil
 }
+
+// FilterFromBytes rebuilds a filter from a raw bit array plus its geometry.
+//
+// This is the counterpart to Bytes, for callers that store the bit array on its own rather
+// than the self-describing MarshalBinary form. Storing raw is what makes a pushed-down
+// predicate possible: Positions are offsets into the bit array, so if the stored column
+// carries a header the database reads the wrong bits while an in-process check, which parses
+// the header first, reads the right ones. The two then disagree in a way that looks like an
+// honest miss.
+//
+// The caller supplies the geometry and key version because a raw array does not describe
+// itself. Use the same values the filter was built with; there is no way to detect a
+// mismatch here, which is the cost of dropping the header.
+func FilterFromBytes(data []byte, nbits, hashCount uint, keyVersion uint32) (Filter, error) {
+	if nbits == 0 || hashCount == 0 {
+		return Filter{}, fmt.Errorf("%w: geometry must be non-zero", ErrBadFilter)
+	}
+	want := int((nbits + 7) / 8)
+	if len(data) != want {
+		return Filter{}, fmt.Errorf("%w: %d bits needs %d bytes, got %d",
+			ErrBadFilter, nbits, want, len(data))
+	}
+	f := Filter{KeyVersion: keyVersion, bits: nbits, hashCount: hashCount, data: make([]byte, want)}
+	copy(f.data, data)
+	return f, nil
+}

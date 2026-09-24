@@ -695,3 +695,59 @@ func TestFilterBytes_IsACopy(t *testing.T) {
 		t.Fatal("mutating the returned slice cleared the filter; Bytes must return a copy")
 	}
 }
+
+func TestFilterFromBytes_RoundTripsAndMatchesPushdown(t *testing.T) {
+	ix := testIndexer(t)
+	k := testKey(t, 3, 0xA1)
+	o := DefaultOptions()
+	orig, err := ix.Build("doc-1", "a note about Zorbulax Industries", k)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	back, err := FilterFromBytes(orig.Bytes(), o.Bits, o.HashCount, k.Version())
+	if err != nil {
+		t.Fatalf("FilterFromBytes: %v", err)
+	}
+	if back.SetBits() != orig.SetBits() || back.KeyVersion != orig.KeyVersion {
+		t.Fatalf("round trip lost state: bits %d vs %d, version %d vs %d",
+			back.SetBits(), orig.SetBits(), back.KeyVersion, orig.KeyVersion)
+	}
+
+	// The property that matters: a predicate built from the RAW bytes agrees with the
+	// rebuilt filter. Storing the marshalled form instead would offset every position by the
+	// header and silently match nothing.
+	raw := orig.Bytes()
+	for _, term := range []string{"Zorbulax", "Industries", "absent", "xyzzy"} {
+		qd := ix.Query(term, k)
+		if len(qd.Digests) == 0 {
+			continue
+		}
+		inProcess, err := back.MayContainAll(qd)
+		if err != nil {
+			t.Fatalf("MayContainAll(%q): %v", term, err)
+		}
+		pushed := true
+		for _, d := range qd.Digests {
+			for _, p := range Positions(d, o.Bits, o.HashCount) {
+				if pgGetBit(raw, p) != 1 {
+					pushed = false
+					break
+				}
+			}
+			if !pushed {
+				break
+			}
+		}
+		if inProcess != pushed {
+			t.Errorf("term %q: rebuilt filter says %v, raw-bytes predicate says %v", term, inProcess, pushed)
+		}
+	}
+}
+
+func TestFilterFromBytes_RejectsWrongSize(t *testing.T) {
+	if _, err := FilterFromBytes(make([]byte, 10), 8192, 7, 1); err == nil {
+		t.Fatal("expected a size mismatch to be refused; silently accepting it would produce " +
+			"a filter that tests the wrong bits")
+	}
+}
