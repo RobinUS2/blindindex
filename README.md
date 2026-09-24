@@ -91,16 +91,38 @@ On an M-series laptop, default geometry (8192 bits, k=7, 35% density):
 
 | | |
 |---|---|
-| Serialised filter | **1059 bytes** per document |
+| Serialised filter | **1035 bytes** per document (1024 raw + 11 header) |
 | Build, 400-token document | **311 µs** |
 | Query and test 1000 filters | **29.5 µs** |
-| False-positive rate, measured | **0.00060** against a theoretical 0.00065 |
+| False-positive rate, measured | **0.00095** against a theoretical 0.00065 |
 
 The false-positive measurement is a test, not a claim: `TestFalsePositiveRateIsWithinTolerance`
 runs 20,000 absent-term queries and compares against `density^k`.
 
-Testing a thousand filters in 30 microseconds is why there is no two-level or union index
-here. Keep filters in memory and scan them.
+## Pushing the test into your datastore
+
+A Bloom test is `k` bit lookups at known offsets, so it does not have to happen in your
+process. `Positions` gives you those offsets, and the bit layout is a documented part of the
+format: bit `i` lives in byte `i/8` at shift `i%8`, which is exactly PostgreSQL's
+`get_bit(bytea, i)`.
+
+```go
+var preds []string
+for _, d := range ix.Query("Zorbulax", key).Digests {
+    for _, p := range blindindex.Positions(d, opts.Bits, opts.HashCount) {
+        preds = append(preds, fmt.Sprintf("get_bit(blind_filter, %d) = 1", p))
+    }
+}
+// SELECT id FROM chunks WHERE key_version = $1 AND <preds joined by AND>
+```
+
+No filter ever leaves the database. `TestPositions` is the in-process equivalent, so you can
+prove both paths agree; `TestPositions_PushedDownPredicateAgreesWithInProcess` does exactly
+that, because a layout mismatch would make the WHERE clause match nothing while looking like
+an honest miss.
+
+Testing a thousand filters in-process takes about 30 microseconds, so scanning is also fine
+at small scale. That is why there is no two-level or union index here.
 
 ## Choosing parameters
 
@@ -144,7 +166,6 @@ nothing.
 
 | | Licence |
 |---|---|
-| [bits-and-blooms/bloom](https://github.com/bits-and-blooms/bloom) | BSD-2-Clause |
 | [blevesearch/segment](https://github.com/blevesearch/segment) | Apache-2.0 |
 | [blevesearch/snowballstem](https://github.com/blevesearch/snowballstem) | BSD-3-Clause |
 | [golang.org/x/text](https://pkg.go.dev/golang.org/x/text) | BSD-3-Clause |

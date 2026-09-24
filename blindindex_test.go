@@ -579,3 +579,119 @@ func BenchmarkMarshalledSize(b *testing.B) {
 		_, _ = f.MarshalBinary()
 	}
 }
+
+// --- Pushed-down predicate: the bit layout is a format contract ---
+
+// pgGetBit mirrors PostgreSQL's get_bit(bytea, n) exactly: byteNo = n/8, bitNo = n%8,
+// (data[byteNo] >> bitNo) & 1. If this and Filter disagree, a WHERE clause built from
+// Positions silently matches nothing, which is the worst possible failure because it looks
+// like an honest miss.
+func pgGetBit(data []byte, n uint) int {
+	if int(n/8) >= len(data) {
+		return 0
+	}
+	return int((data[n/8] >> (n % 8)) & 1)
+}
+
+func TestPositions_PushedDownPredicateAgreesWithInProcess(t *testing.T) {
+	ix := testIndexer(t)
+	k := testKey(t, 1, 0xA1)
+	f, err := ix.Build("doc-1", "a report concerning Zorbulax Industries and Acme", k)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	raw := f.Bytes()
+
+	// A mix of present and absent terms, so both outcomes are exercised.
+	for _, term := range []string{"Zorbulax", "Acme", "report", "absent", "nowhere", "xyzzy"} {
+		qd := ix.Query(term, k)
+		if len(qd.Digests) == 0 {
+			continue
+		}
+		inProcess, err := f.MayContainAll(qd)
+		if err != nil {
+			t.Fatalf("MayContainAll(%q): %v", term, err)
+		}
+
+		// What a datastore would evaluate: every position must be set.
+		pushedDown := true
+		for _, d := range qd.Digests {
+			for _, p := range f.Positions(d) {
+				if pgGetBit(raw, p) != 1 {
+					pushedDown = false
+					break
+				}
+			}
+			if !pushedDown {
+				break
+			}
+		}
+
+		if inProcess != pushedDown {
+			t.Errorf("term %q: in-process says %v, pushed-down predicate says %v. The stored "+
+				"bit layout and Positions must agree or a WHERE clause finds nothing.",
+				term, inProcess, pushedDown)
+		}
+	}
+}
+
+func TestPositions_AreStableAndWithinRange(t *testing.T) {
+	ix := testIndexer(t)
+	k := testKey(t, 1, 0xA1)
+	o := DefaultOptions()
+	qd := ix.Query("Zorbulax", k)
+	if len(qd.Digests) != 1 {
+		t.Fatalf("expected one digest, got %d", len(qd.Digests))
+	}
+	first := Positions(qd.Digests[0], o.Bits, o.HashCount)
+	second := Positions(qd.Digests[0], o.Bits, o.HashCount)
+	if len(first) == 0 {
+		t.Fatal("no positions returned")
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Fatal("Positions is not deterministic")
+		}
+		if first[i] >= o.Bits {
+			t.Fatalf("position %d is outside the filter (%d bits)", first[i], o.Bits)
+		}
+		if i > 0 && first[i] <= first[i-1] {
+			t.Fatal("positions must be ascending and distinct, for a stable WHERE clause")
+		}
+	}
+}
+
+func TestPositions_GeometryMismatchTestsWrongBits(t *testing.T) {
+	// Documents the failure mode rather than the success: positions computed for a different
+	// geometry are simply different, which is why the caller must pass the filter's own.
+	ix := testIndexer(t)
+	k := testKey(t, 1, 0xA1)
+	d := ix.Query("Zorbulax", k).Digests[0]
+	a := Positions(d, 8192, 7)
+	b := Positions(d, 4096, 7)
+	same := len(a) == len(b)
+	if same {
+		for i := range a {
+			if a[i] != b[i] {
+				same = false
+				break
+			}
+		}
+	}
+	if same {
+		t.Fatal("positions for m=8192 and m=4096 were identical; the geometry must matter")
+	}
+}
+
+func TestFilterBytes_IsACopy(t *testing.T) {
+	ix := testIndexer(t)
+	k := testKey(t, 1, 0xA1)
+	f, _ := ix.Build("doc-1", "Zorbulax", k)
+	raw := f.Bytes()
+	for i := range raw {
+		raw[i] = 0
+	}
+	if f.SetBits() == 0 {
+		t.Fatal("mutating the returned slice cleared the filter; Bytes must return a copy")
+	}
+}
